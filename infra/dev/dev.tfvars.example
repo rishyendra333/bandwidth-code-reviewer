@@ -1,0 +1,7 @@
+# Copy to dev.tfvars and supply the Bandwidth-approved identities.
+# HOSTING_ACCOUNT_ID in your .env supplies the hosting account ID.
+teammate_user_arns = [
+  # "arn:aws:iam::111122223333:user/teammate"
+]
+# permissions_boundary_arn = "arn:aws:iam::123456789012:policy/BandwidthBoundary"
+trigger = "@bandwidth-reviewer-dev"

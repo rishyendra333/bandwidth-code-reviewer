@@ -119,7 +119,7 @@ The Prepare step clones the repo and gathers context. The Map step runs one cont
 **Request flow**
 
 1. GitHub sends an `issue_comment` webhook to the Ingress Lambda through an API Gateway HTTP API.
-2. Ingress checks `X-Hub-Signature-256`, ignores bot senders and anything that isn't a command, stores the delivery ID in DynamoDB to drop duplicates, puts a job on SQS and returns `200` within about a second. It makes no GitHub API calls. GitHub gives up after 10 s.
+2. Ingress checks `X-Hub-Signature-256`, ignores bot senders and anything that isn't a command, claims a pending delivery lease, puts a job on SQS, marks it queued and returns `200` within about a second. Queued duplicates are dropped; failed enqueues can be recovered by manual redelivery; jobs include `delivery_id` for downstream idempotency. It makes no GitHub API calls. GitHub gives up after 10 s.
 3. A small Lambda reads from SQS, checks that the commenter has `admin` or `write` permission (via `GET /collaborators/{user}/permission`, not `author_association`), skips PRs that are closed or labeled `skip-ai-review`, pins the PR's `base_sha` and `head_sha`, claims the run in DynamoDB on `{repo}#{pr}` + `{head_sha}` (a second request while one is running gets an "already reviewing" reply), and only then reacts 👀, opens an in-progress `bandwidth-reviewer` check on `head_sha` and starts one Step Functions execution.
 4. **Prepare**: get an installation token, fetch the diff from `compare/{base_sha}...{head_sha}`, clone the head SHA (token passed only as a fetch header, never saved in `.git/config`) into S3 or EFS, parse the changed functions and classes, load config and conventions, decide which reviewers apply.
 5. **Map**: run each applicable reviewer in parallel (container Lambda, 15 min timeout, up to 10 GB ephemeral storage).
@@ -143,9 +143,9 @@ The first mock (phase 0) runs these same stages in-process in one worker Lambda,
 | Secrets | Secrets Manager | App private key, webhook secret |
 | Scheduling | EventBridge Scheduler | Weekly convention refresh, feedback sync |
 | Observability | CloudWatch + X-Ray | Metrics, alarms, traces |
-| Infrastructure as code | AWS CDK (Python) | One stack per environment (dev, prod) |
+| Infrastructure as code | Terraform (HCL) | Separate bootstrap state and configuration per environment |
 
-All Lambda functions, the agent and reviewer code, the evaluation harness and the CDK app are written in **Python 3.12**. The implementation plan lists the specific libraries.
+All Lambda functions, the agent and reviewer code, and the evaluation harness are written in **Python 3.12**. Project infrastructure is Terraform HCL with locked provider dependencies. The implementation plan lists the specific libraries.
 
 ## Shared platform layers
 
@@ -199,14 +199,15 @@ Every reviewer implements the same interface and returns findings in the same sc
 ```python
 from typing import Protocol
 
+
 class Reviewer(Protocol):
-    name: str                 # "security", "tests", ...
-    version: str              # bump when the prompt or logic changes; logged with every finding
-    default_model: str        # Bedrock model ID, overridable in config
-    min_confidence: float     # 0-1, overridable in config
+    name: str  # "security", "tests", ...
+    version: str  # bump when the prompt or logic changes; logged with every finding
+    default_model: str  # Bedrock model ID, overridable in config
+    min_confidence: float  # 0-1, overridable in config
     max_findings: int
 
-    def applies_to(self, ctx: ReviewContext) -> bool: ...   # e.g. infra only if IaC files changed
+    def applies_to(self, ctx: ReviewContext) -> bool: ...  # e.g. infra only if IaC files changed
     def run(self, ctx: ReviewContext, tools: ToolSet) -> list[Finding]: ...
 ```
 
@@ -214,18 +215,19 @@ class Reviewer(Protocol):
 from typing import Literal
 from pydantic import BaseModel, Field
 
+
 class Finding(BaseModel):
     reviewer: str
-    rule_id: str                     # e.g. "security/sql-interpolation", "conventions/C-07"
+    rule_id: str  # e.g. "security/sql-interpolation", "conventions/C-07"
     file: str
-    line: int                        # line in the new version; must fall in a diff hunk to be inline
-    end_line: int | None = None      # for multi-line comments
+    line: int  # line in the new version; must fall in a diff hunk to be inline
+    end_line: int | None = None  # for multi-line comments
     severity: Literal["critical", "high", "medium", "low", "info"]
-    confidence: float = Field(ge=0, le=1)   # the model's calibrated estimate
-    title: str                       # one line
-    body: str                        # what's wrong, why it matters, how to fix; markdown
-    suggestion: str | None = None    # exact replacement code for lines line..end_line
-    evidence: list[str] = []         # e.g. "src/api/users.py:88 calls this without the new arg"
+    confidence: float = Field(ge=0, le=1)  # the model's calibrated estimate
+    title: str  # one line
+    body: str  # what's wrong, why it matters, how to fix; markdown
+    suggestion: str | None = None  # exact replacement code for lines line..end_line
+    evidence: list[str] = []  # e.g. "src/api/users.py:88 calls this without the new arg"
 ```
 
 - Reviewers never call the GitHub API directly. Only the Post step writes to GitHub.
@@ -419,10 +421,10 @@ The platform ships first with one generic reviewer (the first mock, planned in a
 
 **Open questions**
 
-- [ ] Whose AWS account does this run in? Code from Bandwidth repos may only go to an account Bandwidth approves.
+- [x] Shared development hosting: deployment owner’s Bandwidth account **516647891652**, **us-west-2**, profile **default**, deployed through Terraform. Teammates have separate accounts and require approved exact-user cross-account inspection trust. Code from Bandwidth repos may only go to an account Bandwidth approves.
 - [ ] Does Bandwidth use github.com or GitHub Enterprise Server? This changes the API base URL and whether webhooks can reach AWS.
 - [ ] Which languages and frameworks come first? This decides which tree-sitter grammars and Semgrep rules to write.
-- [ ] Which Bedrock models are approved in Bandwidth's AWS account, and in which region?
+- [ ] Which Bedrock models and inference destination regions are approved? Week 1 uses fake Bedrock until this is confirmed; source region is us-west-2.
 - [ ] Is IaC mostly Terraform or CDK? This decides how much the cost reviewer can rely on Infracost.
 - [ ] Does CI already produce coverage reports we can read?
 - [ ] Who approves the GitHub App install for pilot repos, and which 2–3 repos are the pilot?

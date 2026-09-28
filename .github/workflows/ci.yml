@@ -1,0 +1,30 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.18"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.0"
+      - run: uv sync --frozen --python 3.12
+      - run: npm ci --ignore-scripts
+      - run: uv run ruff check . && uv run ruff format --check . && uv run mypy
+      - run: uv run pytest
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/bootstrap validate
+      - run: terraform -chdir=infra/dev init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/dev validate
+      - run: uv run python -m scripts.test_infra

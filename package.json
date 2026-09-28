@@ -1,0 +1,6 @@
+{
+  "name": "bandwidth-reviewer-dev-tools",
+  "private": true,
+  "engines": {"node": ">=20"},
+  "devDependencies": {"smee-client": "^4.3.1"}
+}

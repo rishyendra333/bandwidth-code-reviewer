@@ -1,0 +1,33 @@
+[project]
+name = "bandwidth-reviewer"
+version = "0.1.0"
+description = "Week 1 GitHub webhook intake for the Bandwidth code reviewer"
+requires-python = ">=3.12,<3.13"
+dependencies = ["boto3>=1.35,<2", "pydantic>=2.9,<3"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "moto[server]>=5,<6", "ruff>=0.9,<1", "mypy>=1.14,<2", "pre-commit>=4,<5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reviewer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "functions", "scripts"]
+check_untyped_defs = true
+ignore_missing_imports = true

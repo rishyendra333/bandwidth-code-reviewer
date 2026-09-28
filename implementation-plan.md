@@ -23,7 +23,7 @@ The mock proves the whole loop end to end, from comment to posted review, with t
 | Docs | `USAGE.md`, `INSTALL.md` (permissions and data handling), config JSON Schema, `CHANGELOG.md`, a "try it" sandbox repo with a seeded-bug PR | Docs site |
 | Evaluation | Harness and labeled fixtures from week 2 | CI-gated evaluation |
 | Logging | Every run's inputs, prompt version, per-turn token counts and outputs to S3; run records in DynamoDB | Reaction sync, dashboards |
-| Infra | CDK stack, dev environment only | Prod stack, alarms, budgets |
+| Infra | Terraform configuration, dev environment only | Prod stack, alarms, budgets |
 
 ```text
 GitHub ──issue_comment──► API Gateway ──► ingress λ ──► SQS ──► worker λ (container, 15 min)
@@ -54,15 +54,26 @@ GitHub ──issue_comment──► API Gateway ──► ingress λ ──► S
 - [ ] A new team member goes from `git clone` to passing tests with `make setup && make test` in under 15 minutes on a laptop with the prerequisites installed (`make setup` checks for them and prints install commands for anything missing).
 - [ ] Stretch: 1 week on a Bandwidth pilot repo, deployed in the AWS account agreed in week 1, with reactions collected.
 
+## Week 1 implementation handoff
+
+Infrastructure now uses **Terraform HCL**, with application code in Python 3.12. See [INSTALL.md](INSTALL.md) for exact local setup, IAM console-login profiles, GitHub Apps, backend bootstrap, plan/apply, secret population, and recovery; [WEEK1.md](WEEK1.md) records owners and acceptance evidence.
+
+- One owner deploys reviewed commits into account **516647891652 / us-west-2** using profile **default**. Developers use individual local Apps and Moto; exact teammate user ARNs enable read-only inspection across accounts.
+- Versioned encrypted S3 state uses native locking, separate bootstrap/dev keys, and account guards. Saved plans bind the deployment to its commit and Linux Lambda artifact. CI validates Terraform without AWS credentials.
+- Terraform creates empty Secrets Manager containers. The owner populates values directly, outside Terraform state. Ingress reads only the webhook secret.
+- `make setup`, `make test`, `make lint`, `make dev`, `make bootstrap`, `make bootstrap-apply`, `make plan`, `make deploy`, `make e2e`, and gated `make bedrock-smoke` are implemented. Evaluation/replay and a live review-posting worker remain their later milestones.
+- Installation events use `pk=INSTALLATION#<id>`, `sk=EVENT#<delivery_id>`; later PR history uses `{repo}#{pr}` and `RUN#...`/`CLAIM#...` as below.
+- Delivery status distinguishes pending/queued with a 30-second lease and seven-day TTL. GitHub failed deliveries require manual redelivery; post-send crash duplicates are carried with the same `delivery_id` for worker idempotency.
+
 ## Tech stack and repo layout
 
-Use Python everywhere, including AWS CDK for infrastructure, in one repo so reviewers, platform code and infra change together. Both Lambdas share one Python package, and each handler is a thin wrapper around it.
+Use Python 3.12 for application code and Terraform HCL for infrastructure, in one repo so reviewers, platform code and infra change together. Both Lambdas share one Python package, and each handler is a thin wrapper around it.
 
 | Concern | Choice |
 | --- | --- |
 | Language | Python 3.12 |
 | Packages and environments | `uv`, with one `pyproject.toml` |
-| Infrastructure as code | AWS CDK v2 (Python) |
+| Infrastructure as code | Terraform >=1.10,<2 (HCL), locked AWS provider |
 | GitHub client | `githubkit` (app auth, REST API, webhook signature verification) |
 | LLM | Amazon Bedrock Converse API through `boto3` (adaptive retry mode), with tool use and prompt caching |
 | Schema validation | `pydantic` v2 for `Finding`, config and tool inputs |
@@ -74,7 +85,7 @@ Use Python everywhere, including AWS CDK for infrastructure, in one repo so revi
 
 ```text
 bandwidth-reviewer/
-  infra/                    # CDK app (Python): one stack
+  infra/                    # Terraform HCL: bootstrap state + one dev environment
   src/reviewer/             # shared Python package
     core/                   # ReviewContext, Finding, Reviewer protocol, config loader, command parser
     github/                 # app auth, permissions, compare, reviews, reactions
@@ -90,7 +101,7 @@ bandwidth-reviewer/
   eval/                     # harness CLI, labeled PR fixtures, analysis notebooks
   tests/                    # pytest suites
   pyproject.toml
-  .github/workflows/        # CI: ruff, mypy, pytest, cdk synth
+  .github/workflows/        # CI: ruff, mypy, pytest, terraform fmt -check + validate
 ```
 
 Each pipeline stage takes and returns plain pydantic models, so wrapping stages as separate Step Functions tasks later is a wiring change.
@@ -112,17 +123,17 @@ Six milestones over about 4 weeks. Each ends with something that runs, so the te
 
 1. Register a dev GitHub App named `bandwidth-reviewer-dev`. Permissions: Pull requests read & write, Contents read, Issues read & write, Checks read & write, Metadata read. Subscribe to `issue_comment`.
 2. Store the private key and webhook secret in Secrets Manager.
-3. **Team dev loop (day 1–2):** a `Makefile` with `make setup` (checks for git, ripgrep, Docker, Node and the `aws-cdk` CLI and prints install commands for anything missing, then runs `uv sync` and installs pre-commit hooks), `make test`, `make lint`, `make dev` (runs ingress and worker locally, with smee forwarding webhooks and a fake Bedrock client unless `BEDROCK=real`), `make deploy`, `make eval`, `make replay` and `make e2e` (scripted end-to-end run on the sandbox repo). A `.env.example` lists every variable with a comment. `CONTRIBUTING.md` covers setup in under 10 lines.
+3. **Team dev loop (day 1–2):** a `Makefile` with `make setup` (checks for git, ripgrep, Docker, Node, AWS CLI >=2.32 and Terraform >=1.10,<2 and prints install commands for anything missing, then runs `uv sync` and installs pre-commit hooks), `make test`, `make lint`, `make dev` (runs ingress and worker locally, with smee forwarding webhooks and a fake Bedrock client; Week 1 real review execution stays gated, with `make bedrock-smoke` used only after sponsor approval), `make plan`, `make deploy`, and `make e2e` (local by default; `MODE=aws` for owner cloud smoke). `make eval` and `make replay` arrive with their later milestones. A `.env.example` lists every variable with a comment. `CONTRIBUTING.md` covers setup in under 10 lines.
 4. **One dev app per developer:** a GitHub App has a single webhook URL, so each teammate registers their own `bandwidth-reviewer-dev-<name>` app with its own smee channel and sandbox repo. The shared deployed dev stack uses `bandwidth-reviewer-dev`. The trigger word is a per-environment setting (`TRIGGER=@bandwidth-reviewer-dev-<name>`), so apps never answer each other's commands.
 5. **Day-1 checks:** confirm the app names `bandwidth-reviewer` and `bandwidth-reviewer-dev` are available and register them; check whether a GitHub user named `bandwidth-reviewer` exists, since typing `@bandwidth-reviewer` would notify that user (if it exists and isn't Bandwidth's, ask Bandwidth whether to create a placeholder account or pick a different name).
-6. CDK: API Gateway HTTP API, `ingress` Lambda, SQS queue (visibility timeout 90 min, 6× the worker timeout) with a dead-letter queue (max 3 receives), DynamoDB tables `deliveries` (7-day TTL) and `runs`.
+6. Terraform: API Gateway HTTP API, `ingress` Lambda, SQS queue (visibility timeout 90 min, 6× the worker timeout) with a dead-letter queue (max 3 receives), DynamoDB tables `deliveries` (7-day TTL) and `runs`.
 7. `ingress` makes no GitHub API calls, so it always answers well inside GitHub's 10 s limit:
     1. Verify `X-Hub-Signature-256`; reject with `401` on mismatch.
     2. Record `installation` and `installation_repositories` events (GitHub sends these to every app) in `runs` for the time-to-first-review metric, then return `200`. Otherwise keep only `issue_comment` with action `created` on a PR (`issue.pull_request` present).
     3. Drop comments whose `sender.type` is `Bot` (this covers the app's own replies).
     4. Parse the command (grammar below). No command → return `200` and do nothing.
-    5. Conditional put of `X-GitHub-Delivery` into `deliveries`. Already there → return `200`.
-    6. Send `{installation_id, repo, pr, comment_id, commenter, command, args}` to SQS and return `200`.
+    5. Claim `X-GitHub-Delivery` in `deliveries` with a 30-second pending lease. A queued delivery → `200`; an active pending claim → `503`; an expired claim can be recovered. Release on send failure where possible, and mark queued only after SQS accepts. A post-send crash may repeat a job; the worker must be idempotent.
+    6. Send `{delivery_id, installation_id, repo, pr, comment_id, commenter, command, args}` to SQS, mark queued, then return `200`. Failed writes/enqueues return `503` for manual webhook redelivery.
 8. **Command grammar:** only the first non-empty line of the comment is read; matching is case-insensitive; its first token must equal the configured trigger exactly (so `@bandwidth-reviewer-dev` never matches `@bandwidth-reviewer`); the next word is the command (`review` or `help`); a bare mention means `review`; unknown commands get a reply suggesting the closest command (for example `revew` → `review`) plus the command list; remaining tokens are arguments (`--full` is the only one used).
 9. Week 1 side task (half a day): read how the open-source `pr-agent` project formats hunks with line numbers and handles large PRs. Check its license before copying anything.
 
@@ -130,7 +141,7 @@ Six milestones over about 4 weeks. Each ends with something that runs, so the te
 
 ### 2. Worker skeleton and posting
 
-1. CDK: `worker` container Lambda with an SQS event source (batch size 1, `maximum_concurrency` 5 on the event source mapping; no reserved concurrency, which fails in accounts with low Lambda limits).
+1. Terraform: `worker` container Lambda with an SQS event source (batch size 1, `maximum_concurrency` 5 on the event source mapping; no reserved concurrency, which fails in accounts with low Lambda limits).
 2. `src/reviewer/github`: installation token cache, `get_permission(user)`, `get_pull_request`, `compare(base, head)`, `list_reviews`, `create_review(commit_id, comments, body)`, `react(comment_id, emoji)`, `reply(pr, body)`, `start_check(head_sha, summary)`, `finish_check(check_id, conclusion, title, text)`.
 3. **Message catalog (`core/messages.py`):** every user-facing message in one place, each with what happened, why and what to do next, following the spec's "When something goes wrong" table. Tests check every entry has all three parts. No user-facing string is written anywhere else. The help channel name is one `HELP_CHANNEL` constant.
 4. **`runs` table design:** partition key `{repo}#{pr}`, sort key `RUN#{started_at}#{head_sha}` for run history (the latest `posted` run is one query, newest first), plus a claim item with sort key `CLAIM#{head_sha}` holding `status`, `run_id`, `check_id` and `claimed_at`.
@@ -190,7 +201,7 @@ Six milestones over about 4 weeks. Each ends with something that runs, so the te
 ### 6. Hardening, docs, tuning and optional pilot
 
 1. Tune the prompt and thresholds against the evaluation set until the precision and cost items in the definition of done pass.
-2. CI: `ruff`, `mypy`, `pytest`, `cdk synth`. Run the evaluation manually before any prompt change is merged.
+2. CI: `ruff`, `mypy`, `pytest`, `terraform fmt -check`, `terraform validate`. Run the evaluation manually before any prompt change is merged.
 3. Basic CloudWatch dashboard: runs, failures, duration, tokens, cost per run, dead-letter queue depth, time from install to first review.
 4. **User docs:** `USAGE.md` (commands, what a review looks like, config with examples, escape hatches, feedback, help channel), `INSTALL.md` (each permission and why, what gets posted, where code goes), `CHANGELOG.md` and the config JSON Schema.
 5. **"Try it" sandbox repo:** a small repo with an open PR containing a seeded bug. `USAGE.md` tells new users to comment on it first, so their first review is guaranteed to find something real.
@@ -355,8 +366,8 @@ The biggest risk is access, not code, so the definition of done doesn't depend o
 
 **Prerequisites (week 1)**
 
-- [ ] Decide and write down whose AWS account this runs in. Code from Bandwidth repos may only be sent to an account Bandwidth approves.
-- [ ] Bedrock: pick the account, region and Claude model; write down its cross-region inference profile ID (newer models are invoked through a profile like `us.anthropic...`, not the base model ID); make sure the IAM policy allows both the profile and the model in every region it routes to; submit Anthropic's use-case form and request a higher tokens-per-minute quota
+- [ ] Shared development runs in the deployment owner’s Bandwidth account **516647891652**, region **us-west-2**, AWS profile **default**. Teammates have separate accounts and use an approved cross-account inspection role. Code from Bandwidth repos may only be sent to an account Bandwidth approves.
+- [ ] Bedrock: keep the fake client until Bandwidth confirms the approved model and inference destinations; write down its cross-region inference profile ID (newer models are invoked through a profile like `us.anthropic...`, not the base model ID); make sure the IAM policy allows both the profile and the model in every region it routes to; submit Anthropic's use-case form and request a higher tokens-per-minute quota
 - [ ] GitHub org or sandbox repos where the team can register and install GitHub Apps (one dev app per developer, plus the shared dev app)
 - [ ] App names `bandwidth-reviewer` and `bandwidth-reviewer-dev` checked and registered; check whether a GitHub user named `bandwidth-reviewer` exists
 - [ ] Source repos for evaluation fixtures (team-owned or open-source, with bug-fix history), and a named fixture owner
