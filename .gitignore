@@ -19,3 +19,4 @@ node_modules/
 backend.hcl
 crash.log
 infra/bootstrap/backend.tf
+.DS_Store
