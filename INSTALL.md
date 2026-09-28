@@ -58,7 +58,8 @@ Verify `aws sts get-caller-identity --profile bandwidth-inspect`; its account sh
 
 Check availability of `bandwidth-reviewer` and `bandwidth-reviewer-dev`, and whether the GitHub user `bandwidth-reviewer` exists. Resolve a collision with Bandwidth before registering the shared app. The configured trigger can be changed to match an approved name.
 
-Create the shared app `bandwidth-reviewer-dev` under the agreed project owner. Install it only on the shared sandbox repository. Every developer creates `bandwidth-reviewer-dev-<name>` under their own GitHub account and installs it on their personal sandbox.
+The shared app [bandwidth-reviewer-dev](https://github.com/apps/bandwidth-reviewer-dev) is registered under **AlexShen12**, App ID **5109565**, with ownership handoff planned. The shared sandbox is [rishyendra333/bandwidth-reviewer-demo](https://github.com/rishyendra333/bandwidth-reviewer-demo).
+Its repository owner must install the app and select only `bandwidth-reviewer-demo`; AlexShen12 currently has read-only repository access. Every developer creates `bandwidth-reviewer-dev-<name>` under their own GitHub account and installs it on their personal sandbox.
 
 Repository permissions:
 
@@ -109,6 +110,8 @@ make deploy
 `make deploy` verifies that receipt before applying the saved plan. It writes non-secret identifiers to `.build/outputs.json` and a commit-linked deployment record to `.build/deployment.json`.
 
 Both Secrets Manager resources are initially empty. Populate the shared webhook secret and the app PEM private key **directly in Secrets Manager**, using its console. Terraform never reads or manages secret versions. Select a randomly generated webhook secret of at least 32 bytes and copy the same value into the shared GitHub App settings. Do not store secret contents in state, plan files, shell command arguments, or logs.
+
+For the initial shared deployment, both secret values have already been populated outside Terraform. The private key was checked against GitHub's App identity before storage. See [WEEK1.md](WEEK1.md) for deployment evidence and outstanding acceptance steps.
 
 Set the shared GitHub App's webhook URL to the output `webhook_url`. Verify its ping delivery receives 200 after the webhook secret is populated.
 
