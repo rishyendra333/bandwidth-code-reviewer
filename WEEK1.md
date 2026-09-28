@@ -5,7 +5,7 @@
 - Teammate IAM user ARNs: pending; inspection is disabled until exact identities are supplied.
 - Bedrock model and permitted inference regions: sponsor confirmation pending; fake client is the default.
 - Shared GitHub App owner: **AlexShen12** (temporary; handoff planned). Sandbox: **rishyendra333/bandwidth-reviewer-demo**.
-- Shared App: **bandwidth-reviewer-dev**, App ID **5109565**, [settings](https://github.com/settings/apps/bandwidth-reviewer-dev). The App and both shared secrets are configured; repository-owner installation approval is pending.
+- Shared App: **bandwidth-reviewer-dev**, App ID **5109565**, [settings](https://github.com/settings/apps/bandwidth-reviewer-dev). Installed on `rishyendra333` in selected-repository mode; installation ID **165828858**.
 - Per-developer App registrations and the help channel: record in the team setup handoff.
 
 ## Owner and developer tasks
@@ -19,11 +19,11 @@
 | 5 | Fresh-clone onboarding, CI, local E2E | Actual GitHub PR demo and deployment handoff |
 
 ## Acceptance evidence
-- [ ] A real PR command enqueues one job; measure ingress-to-enqueue duration (target <=1 second, cold starts reported separately).
+- [ ] A real PR command enqueues one job; the repository installation is verified, but the real PR comment has not yet been posted. Measure ingress-to-enqueue duration (target <=1 second, cold starts reported separately).
 - [x] Redelivering a successful synthetic delivery adds no job; real GitHub PR redelivery remains pending installation.
 - [x] Bot, non-PR, edited, unrelated, and another app's trigger events are ignored (mocked tests; bot/unrelated also verified in AWS).
 - [x] Invalid signature returns 401 (mocked and deployed).
-- [x] Installation events persist idempotently in tests; real installation remains pending.
+- [x] Installation events persist idempotently in tests and the real installation event is recorded in DynamoDB (`INSTALLATION#165828858`).
 - [x] Pending leases, expired takeover, enqueue failure, and post-send crash recovery tests pass.
 - [x] Logs correlate delivery/message IDs and contain no credential payloads.
 - [ ] Teammate can assume project inspection role; secrets/state/mutations remain denied.
@@ -50,7 +50,7 @@
 | Timing | Application handling **284.71 ms**; duplicate **15.35 ms**. First Lambda invocation: **864.74 ms** execution plus **1125.51 ms** cold initialization; a one-second cold-start HTTP response is not demonstrated |
 | Secrets | Random webhook signing secret and matching GitHub RSA private key stored directly in separate Secrets Manager resources |
 
-The smoke test deletes only its own synthetic job after verification. Its delivery record and correlated CloudWatch logs remain available until their configured retention expires. The real PR demo, teammate inspection test, and teammate onboarding test remain outstanding.
+The smoke test deletes only its own synthetic job after verification. Its delivery record and correlated CloudWatch logs remain available until their configured retention expires. The real PR comment demo, teammate inspection test, and teammate onboarding test remain outstanding.
 
 ### Shared resource identifiers
 
@@ -64,7 +64,7 @@ The smoke test deletes only its own synthetic job after verification. Its delive
 
 ### Finish the real GitHub demo
 
-1. Have the repository owner install [the App](https://github.com/apps/bandwidth-reviewer-dev) with **Only select repositories → bandwidth-reviewer-demo**.
+1. The repository owner has installed [the App](https://github.com/apps/bandwidth-reviewer-dev) with selected-repository mode; installation ID **165828858** is recorded in DynamoDB.
 2. On [sandbox PR #1](https://github.com/rishyendra333/bandwidth-reviewer-demo/pull/1), post `@bandwidth-reviewer-dev review`.
 3. In the App's Recent Deliveries, verify `issue_comment` returned 200. Use its delivery UUID to find the DynamoDB `queued` record and CloudWatch message ID, then inspect the corresponding SQS job.
 4. Redeliver that delivery and confirm a `duplicate` response with no additional enqueue. Queue reads affect visibility and receive counts; use only the sandbox demo job for this inspection.
